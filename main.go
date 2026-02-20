@@ -2,6 +2,10 @@ package main
 
 import (
 	"context"
+	"embed"
+	"html/template"
+	"io"
+	"io/fs"
 	"net/http"
 
 	"github.com/0x6flab/namegenerator"
@@ -110,15 +114,48 @@ func reader(ws *websocket.Conn, client *Client) {
 	}
 }
 
+func index(c *echo.Context) error {
+	return c.Render(http.StatusOK, "index.html", nil)
+}
+
+type Template struct {
+	templates *template.Template
+}
+
+func (t *Template) Render(
+	ctx *echo.Context,
+	w io.Writer,
+	name string,
+	data any,
+) error {
+	return t.templates.ExecuteTemplate(w, name, data)
+}
+
+//go:embed templates/*.html
+var templateFS embed.FS
+
+//go:embed static/*
+var staticFS embed.FS
+
 func main() {
 	e := echo.New()
 
 	e.Use(middleware.RequestLogger())
 	e.Use(middleware.Recover())
+	e.Use(middleware.Gzip())
+
+	t := &Template{
+		templates: template.Must(template.ParseFS(templateFS, "templates/*.html")),
+	}
+	e.Renderer = t
+
+	staticSub, _ := fs.Sub(staticFS, "static")
+	e.StaticFS("/static", staticSub)
+
+	e.GET("/", index)
+	e.GET("/ws", chat)
 
 	go hub.Run()
-
-	e.GET("/ws", chat)
 
 	sc := echo.StartConfig{Address: ":1323"}
 	if err := sc.Start(context.Background(), e); err != nil {

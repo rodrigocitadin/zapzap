@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8" />
+    <title>ZapZap</title>
+
+    <script src="/static/htmx/htmx.min.js"></script>
+    <script src="/static/htmx/ext/ws.js"></script>
+
+    <style>
+        body {
+            margin: 0;
+            font-family: Arial, sans-serif;
+            background-color: #111b21;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+
+        .chat-container {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .message {
+            max-width: 60%;
+            margin-bottom: 12px;
+            padding: 8px 12px;
+            border-radius: 10px;
+        }
+
+        .mine {
+            align-self: flex-end;
+            background-color: #dcf8c6;
+        }
+
+        .other {
+            align-self: flex-start;
+            background-color: #2a3942;
+            color: white;
+        }
+
+        .username {
+            font-size: 0.75rem;
+            font-weight: bold;
+            margin-bottom: 4px;
+            opacity: 0.8;
+        }
+
+        .input-container {
+            display: flex;
+            padding: 10px;
+            background-color: #202c33;
+        }
+
+        .input-container input {
+            flex: 1;
+            padding: 10px;
+            border-radius: 20px;
+            border: none;
+        }
+
+        .input-container button {
+            margin-left: 10px;
+            padding: 10px 16px;
+            border-radius: 20px;
+            border: none;
+            background-color: #00a884;
+            color: white;
+        }
+    </style>
+</head>
+
+<body hx-ext="ws" ws-connect="/ws">
+
+<div id="chat" class="chat-container"></div>
+
+<form class="input-container"
+      ws-send
+      hx-on="htmx:wsAfterSend: this.reset()">
+
+    <input name="message" required autocomplete="off"/>
+    <button type="submit">Send</button>
+</form>
+
+<script>
+let myId = null;
+
+document.body.addEventListener("htmx:wsAfterMessage", function (event) {
+    const data = JSON.parse(event.detail.message);
+
+    if (!myId) {
+        myId = data.sender.sender_id;
+    }
+
+    const isMine = data.sender.sender_id === myId;
+
+    const wrapper = document.createElement("div");
+    wrapper.classList.add("message");
+    wrapper.classList.add(isMine ? "mine" : "other");
+
+    const username = document.createElement("div");
+    username.classList.add("username");
+    username.textContent = data.sender.sender_name;
+
+    const content = document.createElement("div");
+    content.textContent = data.message;
+
+    wrapper.appendChild(username);
+    wrapper.appendChild(content);
+
+    document.getElementById("chat").appendChild(wrapper);
+    wrapper.scrollIntoView({ behavior: "smooth" });
+});
+</script>
+
+</body>
+</html>
