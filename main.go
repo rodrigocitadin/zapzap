@@ -7,12 +7,22 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/0x6flab/namegenerator"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/labstack/echo/v5"
 	"github.com/labstack/echo/v5/middleware"
+)
+
+const (
+	pongWait       = 60 * time.Second
+	pingPeriod     = (pongWait * 9) / 10
+	maxMessageSize = 4096
 )
 
 type Client struct {
@@ -60,7 +70,7 @@ var (
 		clients:    make(map[uuid.UUID]*Client),
 		register:   make(chan *Client),
 		unregister: make(chan *Client),
-		broadcast:  make(chan Message),
+		broadcast:  make(chan Message, 256),
 	}
 	upgrader = websocket.Upgrader{
 		CheckOrigin: func(r *http.Request) bool {
@@ -85,7 +95,6 @@ func chat(c *echo.Context) error {
 	defer func() {
 		hub.unregister <- client
 		close(client.Ch)
-		ws.Close()
 	}()
 
 	go writer(ws, client)
@@ -95,14 +104,40 @@ func chat(c *echo.Context) error {
 }
 
 func writer(ws *websocket.Conn, client *Client) {
-	for msg := range client.Ch {
-		if err := ws.WriteJSON(msg); err != nil {
-			return
+	ticker := time.NewTicker(pingPeriod)
+	defer func() {
+		ticker.Stop()
+		ws.Close()
+	}()
+
+	for {
+		select {
+		case msg, ok := <-client.Ch:
+			if !ok {
+				ws.WriteMessage(websocket.CloseMessage, []byte{})
+				return
+			}
+
+			if err := ws.WriteJSON(msg); err != nil {
+				return
+			}
+
+		case <-ticker.C:
+			if err := ws.WriteMessage(websocket.PingMessage, nil); err != nil {
+				return
+			}
 		}
 	}
 }
 
 func reader(ws *websocket.Conn, client *Client) {
+	ws.SetReadLimit(maxMessageSize)
+	ws.SetReadDeadline(time.Now().Add(pongWait))
+	ws.SetPongHandler(func(string) error {
+		ws.SetReadDeadline(time.Now().Add(pongWait))
+		return nil
+	})
+
 	for {
 		var msg Message
 		if err := ws.ReadJSON(&msg); err != nil {
@@ -158,7 +193,15 @@ func main() {
 	go hub.Run()
 
 	sc := echo.StartConfig{Address: ":1323"}
-	if err := sc.Start(context.Background(), e); err != nil {
-		e.Logger.Error("failed to start server", "error", err)
-	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	go func() {
+		if err := sc.Start(ctx, e); err != nil && err != http.ErrServerClosed {
+			e.Logger.Error("failed to start server", "error", err)
+		}
+	}()
+
+	<-ctx.Done()
 }
